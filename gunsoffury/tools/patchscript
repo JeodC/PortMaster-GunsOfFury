@@ -37,17 +37,6 @@ remove_files() {
     sleep 1
 }
 
-edit_bytes() {
-    $PYTHON - <<EOF
-with open('$DATADIR/game.droid', 'r+b') as f:
-    # Disable Scale flag at 0x54
-    f.seek(0x54)
-    f.write(b'\xA3')
-    # Recompute checksum at 0x470
-    f.seek(0x470 + 8)  # Skip first 8 bytes (0E F9 5A 25 A6 82 01 1D)
-    f.write(b'\x4A\xE8\x3A\x4E\x51\x3C\xFF\xB3')
-EOF
-}
 compress_audio() {
     echo "Compressing audio..."
     # Clear out the temporary directory
@@ -84,7 +73,6 @@ zip_archive() {
 
 process_game() {
     remove_files
-    edit_bytes
     compress_audio
     zip_archive
 	
