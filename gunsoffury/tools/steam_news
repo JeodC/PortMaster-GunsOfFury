@@ -1,0 +1,114 @@
+#!/bin/sh
+
+GAMEDIR="$PWD"
+APPID=2019300
+NEWSFILE="$GAMEDIR/tools/newsflag"
+CACHE_FILE="$GAMEDIR/tools/steam_news_cache.json"
+API_URL="http://api.steampowered.com/ISteamNews/GetNewsForApp/v2/?appid=${APPID}&count=1"
+MODE="${1}"
+
+# If script is sourced we return, if not we exit
+case "$0" in
+    -sh|sh) SOURCED=0 ;;
+    *)      SOURCED=1 ;;
+esac
+
+exit_script() {
+    if [ "$SOURCED" -eq 1 ]; then
+        return 0
+    else
+        exit 0
+    fi
+}
+
+# Check dependencies
+command -v jq >/dev/null || { echo "Error: jq is required" >&2; exit_script; }
+command -v curl >/dev/null || { echo "Error: curl is required" >&2; exit_script; }
+
+# Fetch news (refresh cache if older than 3 days)
+if [ ! -f "$CACHE_FILE" ] || [ "$(find "$CACHE_FILE" -mtime +3 2>/dev/null)" ]; then
+    response=$(curl -s "$API_URL")
+    [ -n "$response" ] || {
+        echo "Error: Failed to fetch news" >&2
+        PATCHER_NEWS=false
+        export PATCHER_NEWS
+        exit_script 0
+        [ "$SOURCED" -eq 1 ] && return 0
+    }
+    echo "$response" > "$CACHE_FILE" || {
+        echo "Error: Cannot write to $CACHE_FILE" >&2
+        PATCHER_NEWS=false
+        export PATCHER_NEWS
+        exit_script 0
+        [ "$SOURCED" -eq 1 ] && return 0
+    }
+else
+    response=$(cat "$CACHE_FILE")
+fi
+
+# Extract timestamp
+timestamp=$(echo "$response" | jq -r '.appnews.newsitems[0].date // empty')
+# Validate both numbers before comparing
+case "$timestamp" in
+    ''|*[!0-9]*) 
+        echo "Error: Invalid timestamp '$timestamp'" >&2
+        PATCHER_NEWS=false
+        export PATCHER_NEWS
+        exit_script 0
+        [ "$SOURCED" -eq 1 ] && return 0
+        ;;
+esac
+
+case "$prev_time" in
+    ''|*[!0-9]*) prev_time=0 ;;
+esac
+
+# Compare safely now that both are known good numbers
+if [ "$timestamp" -gt "$prev_time" ]; then
+    echo "$timestamp" > "$NEWSFILE" || {
+        echo "Error: Cannot write to $NEWSFILE" >&2
+        PATCHER_NEWS=false
+        export PATCHER_NEWS
+        exit_script 0
+        [ "$SOURCED" -eq 1 ] && return 0
+    }
+    PATCHER_NEWS=true
+else
+    PATCHER_NEWS=false
+fi
+export PATCHER_NEWS
+
+# Exit early in check mode
+if [ "$MODE" = "check" ]; then
+    exit_script 0
+    [ "$SOURCED" -eq 1 ] && return 0
+fi
+
+# Extract news details with jq
+TITLE=$(echo "$response" | jq -r '.appnews.newsitems[0].title // "No title"')
+CONTENT=$(echo "$response" | jq -r '.appnews.newsitems[0].contents // "No content"')
+
+# Convert timestamp to readable date
+DATE=$(date -d "@$timestamp" '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null)
+[ -n "$DATE" ] || DATE="Unknown date"
+
+# Construct output string with jq -r, including literal \n
+output=$(echo "$response" | jq -r --arg date "$DATE" \
+    '.appnews.newsitems[0] | "\($date): \( .title // "No title" )\n\n\( .contents // "No content" )"')
+
+# Check if jq produced valid output
+if [ -z "$output" ]; then
+    echo "Error: Failed to format news with jq" >&2
+    exit_script 1
+fi
+
+echo "If you don't want to get notifications, delete $GAMEDIR/tools/steam_news."
+sleep 1.5
+echo ""
+sleep 1.5
+
+# Output with delay, respecting \n as newline when displayed
+printf "%s" "$output" | while IFS= read -r line; do
+    echo "$line"
+    sleep 1.5
+done
